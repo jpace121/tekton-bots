@@ -1,13 +1,25 @@
-use axum::{extract, http::StatusCode, routing::post, Router};
+use axum::{extract, http::StatusCode, routing::post, Extension, Router};
+use clap::Parser;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::env;
+use std::sync::Arc;
+use tower::ServiceBuilder;
+use tower_http::add_extension::AddExtensionLayer;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let listen_addr = env::var("LISTEN_ADDR").unwrap_or("0.0.0.0:3000".to_owned());
+    let config = Config::parse();
 
-    let app = Router::new().route("/gerrit", post(hook_handler));
+    let listen_addr = config.listen_addr.clone();
+
+    let app =
+        Router::new()
+            .route("/gerrit", post(hook_handler))
+            .layer(
+                ServiceBuilder::new().layer(AddExtensionLayer::new(ApiContext {
+                    config: Arc::new(config),
+                })),
+            );
 
     println!("Hosting at {}", listen_addr);
 
@@ -19,7 +31,10 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn hook_handler(extract::Json(payload): extract::Json<serde_json::Value>) -> StatusCode {
+async fn hook_handler(
+    extract::Json(payload): extract::Json<serde_json::Value>,
+    ctx: Extension<ApiContext>,
+) -> StatusCode {
     let payload_type = match &payload["type"] {
         Value::String(val) => Some(val),
         _ => None,
@@ -58,7 +73,7 @@ async fn hook_handler(extract::Json(payload): extract::Json<serde_json::Value>) 
     };
 
     let post = reqwest::Client::new()
-        .post("http://todo.todo.todo/todo")
+        .post(&ctx.config.service_addr)
         .json(&request_payload)
         .send()
         .await;
@@ -75,4 +90,19 @@ struct TektonTrigger {
     commit: String,
     change_id: String,
     project: String,
+}
+
+/// Config for this node.
+#[derive(clap::Parser, Clone)]
+pub struct Config {
+    #[clap(long, env)]
+    pub service_addr: String,
+    #[clap(long, env)]
+    pub listen_addr: String,
+}
+
+/// Shared context for the routes.
+#[derive(Clone)]
+struct ApiContext {
+    config: Arc<Config>,
 }

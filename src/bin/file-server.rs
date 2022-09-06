@@ -1,32 +1,35 @@
 use anyhow::{bail, Result};
-use axum::{extract::Multipart, routing::post, Router};
-use std::env;
+use axum::{extract::Multipart, routing::post, Extension, Router};
+use clap::Parser;
 use std::path::Path;
 use std::sync::Arc;
+use tower::ServiceBuilder;
+use tower_http::add_extension::AddExtensionLayer;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let file_dir = Arc::new(env::var("FILE_DIR").unwrap_or("files".to_owned()));
-    let listen_addr = env::var("LISTEN_ADDR").unwrap_or("0.0.0.0:3000".to_owned());
+    let config = Config::parse();
 
-    let file_path = Path::new(&*file_dir);
+    let file_path = Path::new(&*config.file_dir);
     if !file_path.exists() {
         bail!("File path '{}' not found.", file_path.display());
     }
 
     let app = Router::new()
-        .route(
-            "/upload",
-            post({
-                let file_dir = Arc::clone(&file_dir);
-                move |body| upload(body, Arc::clone(&file_dir))
-            }),
-        )
-        .merge(axum_extra::routing::SpaRouter::new("/download", &*file_dir));
+        .route("/upload", post(upload))
+        .merge(axum_extra::routing::SpaRouter::new(
+            "/download",
+            &config.file_dir,
+        ))
+        .layer(
+            ServiceBuilder::new().layer(AddExtensionLayer::new(ApiContext {
+                config: Arc::new(config.clone()),
+            })),
+        );
 
-    println!("Hosting at {}", listen_addr);
+    println!("Hosting at {}", config.listen_addr);
 
-    axum::Server::bind(&listen_addr.parse().unwrap())
+    axum::Server::bind(&config.listen_addr.parse().unwrap())
         .serve(app.into_make_service())
         .await
         .unwrap();
@@ -34,8 +37,8 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn upload(mut multipart: Multipart, file_dir: Arc<String>) {
-    let file_dir = (*file_dir).as_str();
+async fn upload(mut multipart: Multipart, ctx: Extension<ApiContext>) {
+    let file_dir = ctx.config.file_dir.as_str();
 
     let mut data = None;
     let mut path = None;
@@ -58,4 +61,19 @@ async fn upload(mut multipart: Multipart, file_dir: Arc<String>) {
     } else {
         println!("Failed to find data or path in upload request.");
     }
+}
+
+/// Config for this node.
+#[derive(clap::Parser, Clone)]
+pub struct Config {
+    #[clap(long, env)]
+    pub file_dir: String,
+    #[clap(long, env)]
+    pub listen_addr: String,
+}
+
+/// Shared context for the routes.
+#[derive(Clone)]
+struct ApiContext {
+    config: Arc<Config>,
 }
