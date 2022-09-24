@@ -14,7 +14,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app =
         Router::new()
-            .route("/gerrit", post(hook_handler))
+            .route("/", post(hook_handler))
             .layer(
                 ServiceBuilder::new().layer(AddExtensionLayer::new(ApiContext {
                     config: Arc::new(config),
@@ -35,11 +35,14 @@ async fn hook_handler(
     extract::Json(payload): extract::Json<serde_json::Value>,
     ctx: Extension<ApiContext>,
 ) -> StatusCode {
+    println!("Got a request!");
+
     let payload_type = match &payload["type"] {
         Value::String(val) => Some(val),
         _ => None,
     };
     if payload_type != Some(&String::from("comment-added")) {
+        println!("Not the right type of request.");
         return StatusCode::BAD_REQUEST;
     }
 
@@ -63,6 +66,7 @@ async fn hook_handler(
     let mut lines = comment.unwrap().lines();
     let first_line = lines.nth(0).unwrap();
     if !first_line.contains(r"\check") {
+        println!(r"Message does not contain \check.");
         return StatusCode::OK;
     }
 
