@@ -1,3 +1,16 @@
+// Copyright 2022 James Pace
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 use axum::{extract, http::StatusCode, routing::post, Extension, Router};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
@@ -12,14 +25,13 @@ async fn main() -> anyhow::Result<()> {
 
     let listen_addr = config.listen_addr.clone();
 
-    let app =
-        Router::new()
-            .route("/", post(hook_handler))
-            .layer(
-                ServiceBuilder::new().layer(AddExtensionLayer::new(ApiContext {
-                    config: Arc::new(config),
-                })),
-            );
+    let app = Router::new()
+        .route("/", post(hook_handler))
+        .layer(
+            ServiceBuilder::new().layer(AddExtensionLayer::new(ApiContext {
+                config: Arc::new(config),
+            })),
+        );
 
     println!("Hosting at {}", listen_addr);
 
@@ -35,7 +47,7 @@ async fn hook_handler(
     extract::Json(payload): extract::Json<serde_json::Value>,
     ctx: Extension<ApiContext>,
 ) -> StatusCode {
-    println!("Got a request!");
+    println!("Got a request! : {}", &payload);
 
     let payload_type = match &payload["type"] {
         Value::String(val) => Some(val),
@@ -46,10 +58,6 @@ async fn hook_handler(
         return StatusCode::BAD_REQUEST;
     }
 
-    let change_id = match &payload["change"]["id"] {
-        Value::String(val) => Some(val),
-        _ => None,
-    };
     let project = match &payload["change"]["project"] {
         Value::String(val) => Some(val),
         _ => None,
@@ -63,18 +71,25 @@ async fn hook_handler(
         _ => None,
     };
 
-    let mut lines = comment.unwrap().lines();
-    let first_line = lines.nth(0).unwrap();
-    if !first_line.contains(r"\check") {
-        println!(r"Message does not contain \check.");
+    let lines = comment.unwrap().lines();
+    let last_line = lines.last().unwrap();
+    if !last_line.contains(r"\check") {
+        println!(r"Last line does not contain \check.");
         return StatusCode::OK;
     }
 
+    let url = format!("{}/{}", &ctx.config.clone_url, project.unwrap());
     let request_payload = TektonTrigger {
         commit: commit.unwrap().to_string(),
-        change_id: change_id.unwrap().to_string(),
-        project: project.unwrap().to_string(),
+        clone_url: url,
+        feedback_url: ctx.config.feedback_url.clone(),
+        feedback_port: ctx.config.feedback_port.clone(),
     };
+
+    println!(
+        "Sending: {}",
+        serde_json::to_string(&request_payload).unwrap()
+    );
 
     let post = reqwest::Client::new()
         .post(&ctx.config.service_addr)
@@ -88,12 +103,13 @@ async fn hook_handler(
     }
 }
 
-// This is the thing we're going to send to Tekton.
+/// This is the thing we're going to send to Tekton.
 #[derive(Serialize, Deserialize)]
 struct TektonTrigger {
     commit: String,
-    change_id: String,
-    project: String,
+    clone_url: String,
+    feedback_url: String,
+    feedback_port: String,
 }
 
 /// Config for this node.
@@ -103,6 +119,12 @@ pub struct Config {
     pub service_addr: String,
     #[clap(long, env)]
     pub listen_addr: String,
+    #[clap(long, env)]
+    pub clone_url: String,
+    #[clap(long, env)]
+    pub feedback_url: String,
+    #[clap(long, env)]
+    pub feedback_port: String,
 }
 
 /// Shared context for the routes.
