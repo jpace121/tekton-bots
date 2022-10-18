@@ -25,13 +25,14 @@ async fn main() -> anyhow::Result<()> {
 
     let listen_addr = config.listen_addr.clone();
 
-    let app = Router::new()
-        .route("/", post(hook_handler))
-        .layer(
-            ServiceBuilder::new().layer(AddExtensionLayer::new(ApiContext {
-                config: Arc::new(config),
-            })),
-        );
+    let app =
+        Router::new()
+            .route("/gerrit", post(gerrit_handler))
+            .layer(
+                ServiceBuilder::new().layer(AddExtensionLayer::new(ApiContext {
+                    config: Arc::new(config),
+                })),
+            );
 
     println!("Hosting at {}", listen_addr);
 
@@ -43,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn hook_handler(
+async fn gerrit_handler(
     extract::Json(payload): extract::Json<serde_json::Value>,
     ctx: Extension<ApiContext>,
 ) -> StatusCode {
